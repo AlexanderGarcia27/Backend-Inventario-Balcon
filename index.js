@@ -28,16 +28,19 @@ async function generarCodigoVenta() {
 // CRUD PRODUCTOS
 // ----------------------------------------------
 
-// Crear producto
+// ----------------------------------------------
+// CRUD PRODUCTOS (VERSION MEJORADA PARA LOTES)
+// ----------------------------------------------
+
+// Crear producto(s) - Acepta un objeto simple O un array de objetos
 app.post("/productos", async (req, res) => {
   try {
-    const { nombre, precio, categoria, stock } = req.body;
+    // 1. Determinar si es un solo producto o una lista (array)
+    const productosParaGuardar = Array.isArray(req.body) ? req.body : [req.body];
 
-    // 1. obtener todos los productos para saber el ultimo codigo
+    // 2. Obtener el último número de código UNA SOLA VEZ
     const snapshot = await db.collection("productos").get();
-
     let ultimoNumero = 0;
-
     snapshot.forEach(doc => {
       const data = doc.data();
       if (data.codigo) {
@@ -46,33 +49,56 @@ app.post("/productos", async (req, res) => {
       }
     });
 
-    // 2. generar el nuevo numero
-    const nuevoNumero = ultimoNumero + 1;
+    const productosAgregados = [];
+    let productosOmitidos = 0;
 
-    // 3. formatearlo como P001
-    const nuevoCodigo = "P" + nuevoNumero.toString().padStart(3, "0");
+    // 3. Iterar sobre la lista de productos
+    for (const producto of productosParaGuardar) {
+      // CRÍTICO: FILTRAR PRODUCTOS INVÁLIDOS (LÍNEAS VACÍAS DEL CSV)
+      if (!producto || !producto.nombre) {
+        productosOmitidos++;
+        continue; // Saltar al siguiente producto si no tiene nombre
+      }
 
-    // 4. crear nuevo producto con código auto-generado
-    const nuevoProducto = {
-      nombre,
-      precio,
-      categoria,
-      stock,
-      codigo: nuevoCodigo,
-      creadoEn: new Date()
-    };
+      // 4. Generar el nuevo código de forma incremental
+      ultimoNumero++;
+      const nuevoCodigo = "P" + ultimoNumero.toString().padStart(3, "0");
 
-    const productoRef = await db.collection("productos").add(nuevoProducto);
+      // 5. Crear el nuevo producto (asegurando valores por defecto)
+      const nuevoProducto = {
+        nombre: producto.nombre,
+        // Los valores ausentes ahora serán 0 o 'Sin Categoría', no undefined
+        precio: Number(producto.precio) || 0,
+        categoria: producto.categoria || 'Sin Categoría',
+        stock: Number(producto.stock) || 0,
+        codigo: nuevoCodigo,
+        creadoEn: new Date()
+      };
+
+      // 6. Guardar en Firestore
+      const productoRef = await db.collection("productos").add(nuevoProducto);
+
+      productosAgregados.push({
+        id: productoRef.id,
+        nombre: nuevoProducto.nombre,
+        codigo: nuevoCodigo
+      });
+    }
+
+    if (productosAgregados.length === 0) {
+      return res.status(400).json({ error: "No se encontró ningún producto válido para agregar." });
+    }
 
     res.json({
-      id: productoRef.id,
-      mensaje: "Producto agregado",
-      codigo_generado: nuevoCodigo
+      mensaje: "Productos agregados correctamente.",
+      total_agregados: productosAgregados.length,
+      total_omitidos: productosOmitidos,
+      productos: productosAgregados
     });
 
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Error al agregar producto" });
+    res.status(500).json({ error: "Error al agregar productos" });
   }
 });
 
@@ -212,20 +238,20 @@ app.listen(PORT, () => console.log("API lista en puerto", PORT));
 
 // Obtener una venta específica
 app.get("/ventas/:id", async (req, res) => {
-    try {
-        const id = req.params.id;
+  try {
+    const id = req.params.id;
 
-        const ventaSnapshot = await db.collection("ventas").doc(id).get();
+    const ventaSnapshot = await db.collection("ventas").doc(id).get();
 
-        if (!ventaSnapshot.exists) {
-            return res.status(404).json({ error: "Venta no encontrada" });
-        }
-
-        return res.json(ventaSnapshot.data());
-    } catch (error) {
-        console.error("Error al obtener la venta:", error);
-        return res.status(500).json({ error: "Error al obtener la venta" });
+    if (!ventaSnapshot.exists) {
+      return res.status(404).json({ error: "Venta no encontrada" });
     }
+
+    return res.json(ventaSnapshot.data());
+  } catch (error) {
+    console.error("Error al obtener la venta:", error);
+    return res.status(500).json({ error: "Error al obtener la venta" });
+  }
 });
 
 // ------------------------------
