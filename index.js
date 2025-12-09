@@ -104,15 +104,25 @@ app.post("/productos", async (req, res) => {
 
 
 // Listar productos
+// Listar productos en orden por código
 app.get("/productos", async (req, res) => {
   try {
     const snapshot = await db.collection("productos").get();
     const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // Ordenar por el número dentro del código: P001 → 1, P087 → 87, etc.
+    lista.sort((a, b) => {
+      const numA = parseInt(a.codigo.replace("P", ""));
+      const numB = parseInt(b.codigo.replace("P", ""));
+      return numA - numB; // orden ascendente
+    });
+
     res.json(lista);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
 
 // Actualizar producto
 app.put("/productos/:id", async (req, res) => {
