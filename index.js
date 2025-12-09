@@ -69,6 +69,7 @@ app.post("/productos", async (req, res) => {
         nombre: producto.nombre,
         // Los valores ausentes ahora serán 0 o 'Sin Categoría', no undefined
         precio: Number(producto.precio) || 0,
+        precioCompra: Number(producto.precioCompra) || 0,
         categoria: producto.categoria || 'Sin Categoría',
         stock: Number(producto.stock) || 0,
         codigo: nuevoCodigo,
@@ -125,9 +126,24 @@ app.get("/productos", async (req, res) => {
 
 
 // Actualizar producto
+// Actualizar producto
 app.put("/productos/:id", async (req, res) => {
   try {
-    await db.collection("productos").doc(req.params.id).update(req.body);
+    const updateData = { ...req.body };
+
+    // Asegurar que los campos numéricos se conviertan a número antes de actualizar
+    if (updateData.precio !== undefined) {
+      updateData.precio = Number(updateData.precio) || 0;
+    }
+    if (updateData.stock !== undefined) {
+      updateData.stock = Number(updateData.stock) || 0;
+    }
+    // NUEVO: Manejo del precioCompra
+    if (updateData.precioCompra !== undefined) {
+      updateData.precioCompra = Number(updateData.precioCompra) || 0;
+    }
+
+    await db.collection("productos").doc(req.params.id).update(updateData);
     res.json({ mensaje: "Producto actualizado" });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -141,6 +157,51 @@ app.delete("/productos/:id", async (req, res) => {
     res.json({ mensaje: "Producto eliminado" });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+// ----------------------------------------------
+// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL)
+// ----------------------------------------------
+
+/**
+ * Función auxiliar para borrar una colección completa (Peligrosa)
+ * @param {string} collectionName - Nombre de la colección a borrar
+ */
+async function deleteCollection(collectionName) {
+  const snapshot = await db.collection(collectionName).get();
+  const batch = db.batch();
+  snapshot.docs.forEach(doc => {
+    batch.delete(doc.ref);
+  });
+  await batch.commit();
+  return snapshot.size;
+}
+
+// Endpoint para borrar todos los productos y todas las ventas
+app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
+  try {
+    // Opcional: Agregar aquí una verificación de token o credencial de administrador
+    // if (req.headers['x-admin-key'] !== 'SU_CLAVE_SECRETA') {
+    //   return res.status(403).json({ error: "Acceso denegado. Se requiere clave de administrador." });
+    // }
+
+    console.log("INICIANDO BORRADO TOTAL DE DATOS...");
+
+    const productosBorrados = await deleteCollection("productos");
+    const ventasBoradas = await deleteCollection("ventas");
+
+    console.log("BORRADO TOTAL FINALIZADO.");
+
+    res.json({
+      mensaje: "¡PELIGRO! Todas las colecciones han sido vaciadas.",
+      detalle: {
+        productos_eliminados: productosBorrados,
+        ventas_eliminadas: ventasBoradas,
+      },
+    });
+  } catch (error) {
+    console.error("Error en el borrado total:", error);
+    res.status(500).json({ error: "Error fatal al intentar borrar colecciones" });
   }
 });
 
