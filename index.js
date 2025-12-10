@@ -7,43 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // ----------------------
-// MIDDLEWARE DE SEGURIDAD (ADMINISTRADOR)
-// ----------------------
-
-// NOTA: En una aplicación real, se usaría JWT para verificar el token 
-// y obtener el rol del usuario de forma segura. Aquí se usa una simulación.
-
-const verificarToken = (req, res, next) => {
-  // Busca el token en el header 'Authorization: Bearer <token>'
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: "Acceso denegado. No se proporcionó token (Requiere Bearer Token)." });
-  }
-
-  // --- SIMULACIÓN DE ROL ---
-  // Si el token existe, asumimos que el usuario está autenticado.
-  // Esto es muy básico, DEBE MEJORARSE en producción.
-  // Asumimos que el token es 'admin123' y el usuario es admin.
-  if (token === 'admin123') {
-    req.user = { rol: 'administrador' };
-  } else {
-    req.user = { rol: 'empleado' }; // O algún otro rol por defecto
-  }
-
-  next();
-};
-
-const soloAdmin = (req, res, next) => {
-  // Verifica si el usuario (adjunto por verificarToken) tiene el rol 'administrador'
-  if (!req.user || req.user.rol !== 'administrador') {
-    return res.status(403).json({ error: "Acceso prohibido. Solo administradores pueden realizar esta acción." });
-  }
-  next();
-};
-
-// ----------------------
 // GENERAR CODIGO VENTA
 // ----------------------
 async function generarCodigoVenta() {
@@ -53,11 +16,11 @@ async function generarCodigoVenta() {
 }
 
 // ----------------------------------------------
-// CRUD PRODUCTOS (ASEGURADOS CON MIDDLEWARE)
+// CRUD PRODUCTOS (ACCESO ABIERTO)
 // ----------------------------------------------
 
 // Crear producto(s)
-app.post("/productos", verificarToken, soloAdmin, async (req, res) => {
+app.post("/productos", async (req, res) => {
   try {
     const productosParaGuardar = Array.isArray(req.body) ? req.body : [req.body];
     const snapshot = await db.collection("productos").get();
@@ -119,7 +82,7 @@ app.post("/productos", verificarToken, soloAdmin, async (req, res) => {
 });
 
 // Listar productos
-app.get("/productos", verificarToken, async (req, res) => {
+app.get("/productos", async (req, res) => {
   try {
     const snapshot = await db.collection("productos").get();
     const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -137,7 +100,7 @@ app.get("/productos", verificarToken, async (req, res) => {
 });
 
 // Actualizar producto
-app.put("/productos/:id", verificarToken, soloAdmin, async (req, res) => {
+app.put("/productos/:id", async (req, res) => {
   try {
     const updateData = { ...req.body };
 
@@ -159,7 +122,7 @@ app.put("/productos/:id", verificarToken, soloAdmin, async (req, res) => {
 });
 
 // Eliminar producto
-app.delete("/productos/:id", verificarToken, soloAdmin, async (req, res) => {
+app.delete("/productos/:id", async (req, res) => {
   try {
     await db.collection("productos").doc(req.params.id).delete();
     res.json({ mensaje: "Producto eliminado" });
@@ -169,7 +132,7 @@ app.delete("/productos/:id", verificarToken, soloAdmin, async (req, res) => {
 });
 
 // ----------------------------------------------
-// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL - SOLO ADMIN)
+// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL - ACCESO ABIERTO)
 // ----------------------------------------------
 
 async function deleteCollection(collectionName) {
@@ -182,7 +145,7 @@ async function deleteCollection(collectionName) {
   return snapshot.size;
 }
 
-app.delete("/administracion/borrar-todo-peligro", verificarToken, soloAdmin, async (req, res) => {
+app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
   try {
     console.log("INICIANDO BORRADO TOTAL DE DATOS...");
     const productosBorrados = await deleteCollection("productos");
@@ -203,11 +166,11 @@ app.delete("/administracion/borrar-todo-peligro", verificarToken, soloAdmin, asy
 });
 
 // ----------------------------------------------
-// VENTAS (ADAPTADAS PARA CARRITO - SOLO ADMIN)
+// VENTAS (ADAPTADAS PARA CARRITO - ACCESO ABIERTO)
 // ----------------------------------------------
 
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
-app.post("/ventas", verificarToken, soloAdmin, async (req, res) => {
+app.post("/ventas", async (req, res) => {
   try {
     // Espera 'articulos' con el precioVenta ajustado (o base)
     const { articulos, total, monto, cambio, nota } = req.body;
@@ -303,7 +266,7 @@ app.post("/ventas", verificarToken, soloAdmin, async (req, res) => {
 });
 
 // Obtener todas las ventas (Listado resumido)
-app.get("/ventas", verificarToken, async (req, res) => {
+app.get("/ventas", async (req, res) => {
   try {
     const ventasSnapshot = await db.collection("ventas").get();
     const productosSnapshot = await db.collection("productos").get();
@@ -362,7 +325,7 @@ app.get("/ventas", verificarToken, async (req, res) => {
 });
 
 // Obtener una venta específica (Detalle)
-app.get("/ventas/:id", verificarToken, async (req, res) => {
+app.get("/ventas/:id", async (req, res) => {
   try {
     const id = req.params.id;
 
@@ -387,7 +350,7 @@ app.get("/ventas/:id", verificarToken, async (req, res) => {
 
 
 // ------------------------------
-// LOGIN y DASHBOARD (SIN CAMBIOS)
+// LOGIN y DASHBOARD (SIN SEGURIDAD)
 // ------------------------------
 
 app.post('/login', async (req, res) => {
@@ -411,10 +374,10 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
-    // DEBES DEVOLVER UN TOKEN SEGURO, AQUÍ DEVOLVEMOS EL TOKEN SIMULADO 'admin123'
+    // Se devuelve un token (aunque no se use) para simular el flujo
     return res.json({
       mensaje: "Inicio de sesión exitoso",
-      token: userDoc.rol === 'administrador' ? 'admin123' : 'empleado_token',
+      token: 'token_sin_uso',
       rol: userDoc.rol
     });
 
@@ -423,9 +386,8 @@ app.post('/login', async (req, res) => {
   }
 });
 
-app.get("/dashboard/totales", verificarToken, async (req, res) => {
+app.get("/dashboard/totales", async (req, res) => {
   try {
-    // Este endpoint está protegido pero no requiere ser solo admin (puede ser visto por empleados)
     const productosSnapshot = await db.collection("productos").get();
     const totalProductos = productosSnapshot.size;
 
