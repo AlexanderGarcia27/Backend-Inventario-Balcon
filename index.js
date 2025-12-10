@@ -16,7 +16,7 @@ async function generarCodigoVenta() {
 }
 
 // ----------------------------------------------
-// CRUD PRODUCTOS
+// CRUD PRODUCTOS (SIN CAMBIOS)
 // ----------------------------------------------
 
 // Crear producto(s) - Acepta un objeto simple O un array de objetos
@@ -130,8 +130,9 @@ app.delete("/productos/:id", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 // ----------------------------------------------
-// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL)
+// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL) (SIN CAMBIOS)
 // ----------------------------------------------
 
 async function deleteCollection(collectionName) {
@@ -165,79 +166,110 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 });
 
 // ----------------------------------------------
-// VENTAS
+// VENTAS (ADAPTADAS PARA CARRITO)
 // ----------------------------------------------
 
-// Crear una venta (Guarda costoVenta)
+// Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
 app.post("/ventas", async (req, res) => {
   try {
-    const { productoId, cantidad, total, monto, cambio, nota } = req.body;
+    // CAMBIO CLAVE: Esperar 'articulos' como un array de objetos
+    const { articulos, total, monto, cambio, nota } = req.body;
 
-    if (!productoId || !cantidad || !total || !monto) {
-      return res.status(400).json({ error: "Faltan datos obligatorios" });
+    if (!articulos || !Array.isArray(articulos) || articulos.length === 0 || !total || !monto) {
+      return res.status(400).json({ error: "Faltan datos obligatorios o la lista de artículos está vacía." });
     }
 
-    // Obtener producto
-    const productoRef = db.collection("productos").doc(productoId);
-    const productoDoc = await productoRef.get();
+    let costoVentaTotal = 0;
+    const batch = db.batch();
+    const articulosVentaFinal = []; // Para guardar en la venta principal
 
-    if (!productoDoc.exists) {
-      return res.status(404).json({ error: "Producto no encontrado" });
+    // 1. Validar y procesar cada artículo en el carrito
+    for (const item of articulos) {
+      const { productoId, cantidad, precioVenta } = item;
+
+      const qty = Number(cantidad);
+      const salePrice = Number(precioVenta);
+
+      if (!productoId || qty <= 0 || salePrice <= 0) {
+        // Si un artículo es inválido, abortamos toda la transacción
+        return res.status(400).json({ error: "Datos de artículo inválidos (productoId, cantidad o precioVenta)" });
+      }
+
+      const productoRef = db.collection("productos").doc(productoId);
+      const productoDoc = await productoRef.get();
+
+      if (!productoDoc.exists) {
+        return res.status(404).json({ error: `Producto no encontrado con ID: ${productoId}` });
+      }
+
+      const producto = productoDoc.data();
+
+      // Validar stock
+      if (producto.stock < qty) {
+        return res.status(400).json({ error: `Stock insuficiente para el producto ${producto.nombre}. Disponible: ${producto.stock}, Solicitado: ${qty}` });
+      }
+
+      // Cálculo de Costo y Ganancia (a nivel de artículo)
+      const precioCompraUnidad = producto.precioCompra || 0;
+      const costoMercanciaVendidaArticulo = precioCompraUnidad * qty;
+      costoVentaTotal += costoMercanciaVendidaArticulo;
+
+      // Preparar descuento de stock en el batch
+      batch.update(productoRef, {
+        stock: producto.stock - qty
+      });
+
+      // Agregar al array final, incluyendo datos para la BD
+      articulosVentaFinal.push({
+        productoId: productoId,
+        cantidad: qty,
+        precioVenta: salePrice,
+        subtotal: qty * salePrice,
+        costoUnitario: precioCompraUnidad, // Para referencia
+      });
     }
 
-    const producto = productoDoc.data();
+    // 2. Ejecutar todas las actualizaciones de stock
+    await batch.commit();
 
-    // Validar stock
-    if (producto.stock < cantidad) {
-      return res.status(400).json({ error: "Stock insuficiente" });
-    }
-
-    // Cálculo de Costo y Ganancia
-    const precioCompraUnidad = producto.precioCompra || 0;
-    const costoMercanciaVendida = precioCompraUnidad * cantidad;
-
-    // Descontar stock
-    await productoRef.update({
-      stock: producto.stock - cantidad
-    });
-
-    // Generar código de venta V00X
+    // 3. Generar código de venta V00X
     const codigoVenta = await generarCodigoVenta();
 
-    // Crear objeto de venta
+    // 4. Calcular la ganancia total
+    const gananciaTotal = Number(total) - costoVentaTotal;
+
+    // 5. Crear objeto de venta principal
     const ventaData = {
       codigo: codigoVenta,
-      productoId,
-      cantidad: Number(cantidad),
+      articulos: articulosVentaFinal, // CRUCIAL: Lista de artículos
       total: Number(total),
       monto: Number(monto),
       cambio: Number(cambio),
-      costoVenta: costoMercanciaVendida, // CRUCIAL: Guardamos el costo
+      costoVenta: costoVentaTotal, // CRUCIAL: Costo total de todos los artículos
+      ganancia: gananciaTotal,
       nota: nota || "",
       fecha: new Date()
     };
 
-    // Guardar venta
+    // 6. Guardar venta
     const ventaRef = await db.collection("ventas").add(ventaData);
 
     res.json({
-      mensaje: "Venta registrada correctamente",
+      mensaje: "Venta registrada correctamente (Multi-artículo)",
       id: ventaRef.id,
       venta: ventaData
     });
 
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error al registrar venta multi-artículo:", error);
+    res.status(500).json({ error: error.message || "Error desconocido al registrar la venta" });
   }
 });
 
-// Obtener todas las ventas con datos del producto (Optimizado y calcula Ganancia)
+// Obtener todas las ventas con datos del producto (Optimizado y calcula Ganancia - Ahora resumido)
 app.get("/ventas", async (req, res) => {
   try {
-    // Total de lecturas: 1
     const ventasSnapshot = await db.collection("ventas").get();
-
-    // Total de lecturas: 2 (Obtenemos todos los productos de golpe)
     const productosSnapshot = await db.collection("productos").get();
     const productosMap = {};
     productosSnapshot.docs.forEach(doc => {
@@ -250,20 +282,38 @@ app.get("/ventas", async (req, res) => {
       const venta = doc.data();
       venta.id = doc.id;
 
-      // Calcular la ganancia
+      // Calcular la ganancia (ya debería estar calculada, pero se reafirma)
       const costoVenta = venta.costoVenta || 0;
       venta.ganancia = parseFloat((venta.total - costoVenta).toFixed(2));
 
-      // Obtener datos del producto usando el mapa (0 lecturas adicionales)
-      const producto = productosMap[venta.productoId];
+      // --- ADAPTACIÓN PARA VENTA MULTI-PRODUCTO (RESUMEN) ---
+      const articulos = venta.articulos || [];
 
-      if (producto) {
-        venta.productoNombre = producto.nombre;
-        venta.productoCodigo = producto.codigo;
+      if (articulos.length > 0) {
+        const primerArticulo = articulos[0];
+        const producto = productosMap[primerArticulo.productoId];
+        const numArticulos = articulos.length;
+
+        if (producto) {
+          // Resumen para la tabla principal
+          venta.productoNombre = numArticulos > 1 ? `${producto.nombre} (+${numArticulos - 1} más)` : producto.nombre;
+          venta.productoCodigo = producto.codigo;
+          venta.cantidad = `${numArticulos} artículos`; // Mostrar el número de artículos
+        } else {
+          venta.productoNombre = `Venta con ${numArticulos} artículos (Detalles no disponibles)`;
+          venta.productoCodigo = "-";
+          venta.cantidad = `${numArticulos} artículos`;
+        }
       } else {
-        venta.productoNombre = "Producto eliminado";
-        venta.productoCodigo = "-";
+        // Manejo de ventas unitarias antiguas o errores (Legacy Support)
+        const productoId = venta.productoId;
+        const producto = productoId ? productosMap[productoId] : null;
+
+        venta.productoNombre = producto ? producto.nombre : "Venta sin detalles";
+        venta.productoCodigo = producto ? producto.codigo : "-";
+        venta.cantidad = venta.cantidad || 1;
       }
+      // --------------------------------------------------
 
       ventas.push(venta);
     }
@@ -275,7 +325,7 @@ app.get("/ventas", async (req, res) => {
   }
 });
 
-// Obtener una venta específica (Calcula Ganancia)
+// Obtener una venta específica (No necesita muchos cambios, ya tiene el array de artículos si existe)
 app.get("/ventas/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -288,7 +338,7 @@ app.get("/ventas/:id", async (req, res) => {
 
     const venta = ventaSnapshot.data();
 
-    // Calcular la ganancia
+    // Calcular la ganancia (ya debería estar en el objeto, pero se recalcula/reafirma)
     const costoVenta = venta.costoVenta || 0;
     venta.ganancia = parseFloat((venta.total - costoVenta).toFixed(2));
 
@@ -305,7 +355,7 @@ const PORT = 3000;
 app.listen(PORT, () => console.log("API lista en puerto", PORT));
 
 // ------------------------------
-// LOGIN y DASHBOARD
+// LOGIN y DASHBOARD (SIN CAMBIOS)
 // ------------------------------
 
 app.post('/login', async (req, res) => {
