@@ -7,15 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // ----------------------
-// GENERAR CODIGO PRODUCTO
-// ----------------------
-async function generarCodigoProducto() {
-  const productos = await db.collection("productos").get();
-  const total = productos.size + 1;
-  return "P" + String(total).padStart(3, "0");
-}
-
-// ----------------------
 // GENERAR CODIGO VENTA
 // ----------------------
 async function generarCodigoVenta() {
@@ -28,17 +19,10 @@ async function generarCodigoVenta() {
 // CRUD PRODUCTOS
 // ----------------------------------------------
 
-// ----------------------------------------------
-// CRUD PRODUCTOS (VERSION MEJORADA PARA LOTES)
-// ----------------------------------------------
-
 // Crear producto(s) - Acepta un objeto simple O un array de objetos
 app.post("/productos", async (req, res) => {
   try {
-    // 1. Determinar si es un solo producto o una lista (array)
     const productosParaGuardar = Array.isArray(req.body) ? req.body : [req.body];
-
-    // 2. Obtener el último número de código UNA SOLA VEZ
     const snapshot = await db.collection("productos").get();
     let ultimoNumero = 0;
     snapshot.forEach(doc => {
@@ -52,22 +36,17 @@ app.post("/productos", async (req, res) => {
     const productosAgregados = [];
     let productosOmitidos = 0;
 
-    // 3. Iterar sobre la lista de productos
     for (const producto of productosParaGuardar) {
-      // CRÍTICO: FILTRAR PRODUCTOS INVÁLIDOS (LÍNEAS VACÍAS DEL CSV)
       if (!producto || !producto.nombre) {
         productosOmitidos++;
-        continue; // Saltar al siguiente producto si no tiene nombre
+        continue;
       }
 
-      // 4. Generar el nuevo código de forma incremental
       ultimoNumero++;
       const nuevoCodigo = "P" + ultimoNumero.toString().padStart(3, "0");
 
-      // 5. Crear el nuevo producto (asegurando valores por defecto)
       const nuevoProducto = {
         nombre: producto.nombre,
-        // Los valores ausentes ahora serán 0 o 'Sin Categoría', no undefined
         precio: Number(producto.precio) || 0,
         precioCompra: Number(producto.precioCompra) || 0,
         categoria: producto.categoria || 'Sin Categoría',
@@ -76,7 +55,6 @@ app.post("/productos", async (req, res) => {
         creadoEn: new Date()
       };
 
-      // 6. Guardar en Firestore
       const productoRef = await db.collection("productos").add(nuevoProducto);
 
       productosAgregados.push({
@@ -103,19 +81,16 @@ app.post("/productos", async (req, res) => {
   }
 });
 
-
 // Listar productos
-// Listar productos en orden por código
 app.get("/productos", async (req, res) => {
   try {
     const snapshot = await db.collection("productos").get();
     const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-    // Ordenar por el número dentro del código: P001 → 1, P087 → 87, etc.
     lista.sort((a, b) => {
       const numA = parseInt(a.codigo.replace("P", ""));
       const numB = parseInt(b.codigo.replace("P", ""));
-      return numA - numB; // orden ascendente
+      return numA - numB;
     });
 
     res.json(lista);
@@ -124,21 +99,17 @@ app.get("/productos", async (req, res) => {
   }
 });
 
-
-// Actualizar producto
 // Actualizar producto
 app.put("/productos/:id", async (req, res) => {
   try {
     const updateData = { ...req.body };
 
-    // Asegurar que los campos numéricos se conviertan a número antes de actualizar
     if (updateData.precio !== undefined) {
       updateData.precio = Number(updateData.precio) || 0;
     }
     if (updateData.stock !== undefined) {
       updateData.stock = Number(updateData.stock) || 0;
     }
-    // NUEVO: Manejo del precioCompra
     if (updateData.precioCompra !== undefined) {
       updateData.precioCompra = Number(updateData.precioCompra) || 0;
     }
@@ -163,10 +134,6 @@ app.delete("/productos/:id", async (req, res) => {
 // GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL)
 // ----------------------------------------------
 
-/**
- * Función auxiliar para borrar una colección completa (Peligrosa)
- * @param {string} collectionName - Nombre de la colección a borrar
- */
 async function deleteCollection(collectionName) {
   const snapshot = await db.collection(collectionName).get();
   const batch = db.batch();
@@ -177,23 +144,15 @@ async function deleteCollection(collectionName) {
   return snapshot.size;
 }
 
-// Endpoint para borrar todos los productos y todas las ventas
 app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
   try {
-    // Opcional: Agregar aquí una verificación de token o credencial de administrador
-    // if (req.headers['x-admin-key'] !== 'SU_CLAVE_SECRETA') {
-    //   return res.status(403).json({ error: "Acceso denegado. Se requiere clave de administrador." });
-    // }
-
     console.log("INICIANDO BORRADO TOTAL DE DATOS...");
-
     const productosBorrados = await deleteCollection("productos");
     const ventasBoradas = await deleteCollection("ventas");
-
     console.log("BORRADO TOTAL FINALIZADO.");
 
     res.json({
-      mensaje: "¡PELIGRO! Todas las colecciones han sido vaciadas.",
+      mensaje: "PELIGRO! Todas las colecciones han sido vaciadas.",
       detalle: {
         productos_eliminados: productosBorrados,
         ventas_eliminadas: ventasBoradas,
@@ -209,7 +168,7 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 // VENTAS
 // ----------------------------------------------
 
-// Crear una venta
+// Crear una venta (Guarda costoVenta)
 app.post("/ventas", async (req, res) => {
   try {
     const { productoId, cantidad, total, monto, cambio, nota } = req.body;
@@ -233,6 +192,10 @@ app.post("/ventas", async (req, res) => {
       return res.status(400).json({ error: "Stock insuficiente" });
     }
 
+    // Cálculo de Costo y Ganancia
+    const precioCompraUnidad = producto.precioCompra || 0;
+    const costoMercanciaVendida = precioCompraUnidad * cantidad;
+
     // Descontar stock
     await productoRef.update({
       stock: producto.stock - cantidad
@@ -245,10 +208,11 @@ app.post("/ventas", async (req, res) => {
     const ventaData = {
       codigo: codigoVenta,
       productoId,
-      cantidad,
-      total,
-      monto,
-      cambio,
+      cantidad: Number(cantidad),
+      total: Number(total),
+      monto: Number(monto),
+      cambio: Number(cambio),
+      costoVenta: costoMercanciaVendida, // CRUCIAL: Guardamos el costo
       nota: nota || "",
       fecha: new Date()
     };
@@ -267,26 +231,35 @@ app.post("/ventas", async (req, res) => {
   }
 });
 
-
-
-// Obtener todas las ventas con datos del producto
+// Obtener todas las ventas con datos del producto (Optimizado y calcula Ganancia)
 app.get("/ventas", async (req, res) => {
   try {
+    // Total de lecturas: 1
     const ventasSnapshot = await db.collection("ventas").get();
+
+    // Total de lecturas: 2 (Obtenemos todos los productos de golpe)
+    const productosSnapshot = await db.collection("productos").get();
+    const productosMap = {};
+    productosSnapshot.docs.forEach(doc => {
+      productosMap[doc.id] = doc.data();
+    });
+
     const ventas = [];
 
     for (const doc of ventasSnapshot.docs) {
       const venta = doc.data();
       venta.id = doc.id;
 
-      // Obtener datos del producto
-      const productoRef = db.collection("productos").doc(venta.productoId);
-      const productoDoc = await productoRef.get();
+      // Calcular la ganancia
+      const costoVenta = venta.costoVenta || 0;
+      venta.ganancia = parseFloat((venta.total - costoVenta).toFixed(2));
 
-      if (productoDoc.exists) {
-        const producto = productoDoc.data();
+      // Obtener datos del producto usando el mapa (0 lecturas adicionales)
+      const producto = productosMap[venta.productoId];
+
+      if (producto) {
         venta.productoNombre = producto.nombre;
-        venta.productoCodigo = producto.codigo; // P001, P002, etc.
+        venta.productoCodigo = producto.codigo;
       } else {
         venta.productoNombre = "Producto eliminado";
         venta.productoCodigo = "-";
@@ -302,12 +275,7 @@ app.get("/ventas", async (req, res) => {
   }
 });
 
-
-// ----------------------
-const PORT = 3000;
-app.listen(PORT, () => console.log("API lista en puerto", PORT));
-
-// Obtener una venta específica
+// Obtener una venta específica (Calcula Ganancia)
 app.get("/ventas/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -318,15 +286,26 @@ app.get("/ventas/:id", async (req, res) => {
       return res.status(404).json({ error: "Venta no encontrada" });
     }
 
-    return res.json(ventaSnapshot.data());
+    const venta = ventaSnapshot.data();
+
+    // Calcular la ganancia
+    const costoVenta = venta.costoVenta || 0;
+    venta.ganancia = parseFloat((venta.total - costoVenta).toFixed(2));
+
+    return res.json(venta);
   } catch (error) {
     console.error("Error al obtener la venta:", error);
     return res.status(500).json({ error: "Error al obtener la venta" });
   }
 });
 
+
+// ----------------------
+const PORT = 3000;
+app.listen(PORT, () => console.log("API lista en puerto", PORT));
+
 // ------------------------------
-// LOGIN
+// LOGIN y DASHBOARD
 // ------------------------------
 
 app.post('/login', async (req, res) => {
@@ -357,20 +336,15 @@ app.post('/login', async (req, res) => {
   }
 });
 
-
-// Obtener total de productos, productos con bajo stock y ventas últimos 7 días
 app.get("/dashboard/totales", async (req, res) => {
   try {
-    // 1. Total de productos
     const productosSnapshot = await db.collection("productos").get();
     const totalProductos = productosSnapshot.size;
 
-    // 2. Productos con stock bajo (< 10)
     const productosStockBajo = productosSnapshot.docs.filter(
       doc => doc.data().stock < 10
     ).length;
 
-    // 3. Total de ventas últimas 7 días
     const hoy = new Date();
     const hace7dias = new Date();
     hace7dias.setDate(hoy.getDate() - 7);
