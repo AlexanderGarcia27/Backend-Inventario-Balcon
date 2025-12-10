@@ -210,35 +210,15 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 // ----------------------------------------------
 
 // Crear una venta
-// Crear una venta (VERSION MEJORADA: Incluye precio unitario y precio de compra)
 app.post("/ventas", async (req, res) => {
   try {
-    // AÑADIDO 'precio' (venta unitario) y 'precioCompra' (unitario del producto)
-    const { productoId, cantidad, precio, total, monto, cambio, nota, precioCompra } = req.body;
+    const { productoId, cantidad, total, monto, cambio, nota } = req.body;
 
-    // NOTA: Ahora validamos que 'precio' y 'precioCompra' también estén presentes, o manejamos sus valores por defecto.
-    if (!productoId || !cantidad || !total || !monto || precio === undefined || precioCompra === undefined) {
-      // Si precio o precioCompra son 0, están presentes, pero si son undefined, falta el dato.
-      return res.status(400).json({ error: "Faltan datos obligatorios (productoId, cantidad, precio, total, monto, precioCompra)" });
+    if (!productoId || !cantidad || !total || !monto) {
+      return res.status(400).json({ error: "Faltan datos obligatorios" });
     }
 
-    const cantidadNum = Number(cantidad);
-    const precioVentaNum = Number(precio);
-    const totalNum = Number(total);
-    const montoNum = Number(monto);
-    const cambioNum = Number(cambio);
-    // Asegurar que el precio de compra unitario sea un número
-    const precioCompraNum = Number(precioCompra);
-
-
-    // Opcional: Validación de consistencia
-    if (Math.abs(totalNum - (precioVentaNum * cantidadNum)) > 0.01) {
-      // La diferencia es mayor a 1 centavo, indica inconsistencia entre precio, cantidad y total
-      console.warn(`Inconsistencia detectada: Total calculado ${precioVentaNum * cantidadNum} vs Total enviado ${totalNum}`);
-      // Podrías devolver un error 400 aquí, pero por ahora solo es un warning
-    }
-
-    // Obtener producto (solo para validar stock y obtener nombre/código si el frontend no los envió)
+    // Obtener producto
     const productoRef = db.collection("productos").doc(productoId);
     const productoDoc = await productoRef.get();
 
@@ -249,13 +229,13 @@ app.post("/ventas", async (req, res) => {
     const producto = productoDoc.data();
 
     // Validar stock
-    if (producto.stock < cantidadNum) {
+    if (producto.stock < cantidad) {
       return res.status(400).json({ error: "Stock insuficiente" });
     }
 
     // Descontar stock
     await productoRef.update({
-      stock: producto.stock - cantidadNum
+      stock: producto.stock - cantidad
     });
 
     // Generar código de venta V00X
@@ -265,15 +245,12 @@ app.post("/ventas", async (req, res) => {
     const ventaData = {
       codigo: codigoVenta,
       productoId,
-      cantidad: cantidadNum,
-      total: totalNum,
-      monto: montoNum,
-      cambio: cambioNum,
+      cantidad,
+      total,
+      monto,
+      cambio,
       nota: nota || "",
-      fecha: new Date(),
-      // CAMPOS AÑADIDOS PARA EL CÁLCULO FUTURO DE GANANCIA
-      precioVentaUnitario: precioVentaNum,
-      precioCompraUnitario: precioCompraNum
+      fecha: new Date()
     };
 
     // Guardar venta
