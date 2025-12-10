@@ -7,6 +7,43 @@ app.use(cors());
 app.use(express.json());
 
 // ----------------------
+// MIDDLEWARE DE SEGURIDAD (ADMINISTRADOR)
+// ----------------------
+
+// NOTA: En una aplicación real, se usaría JWT para verificar el token 
+// y obtener el rol del usuario de forma segura. Aquí se usa una simulación.
+
+const verificarToken = (req, res, next) => {
+  // Busca el token en el header 'Authorization: Bearer <token>'
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Acceso denegado. No se proporcionó token (Requiere Bearer Token)." });
+  }
+
+  // --- SIMULACIÓN DE ROL ---
+  // Si el token existe, asumimos que el usuario está autenticado.
+  // Esto es muy básico, DEBE MEJORARSE en producción.
+  // Asumimos que el token es 'admin123' y el usuario es admin.
+  if (token === 'admin123') {
+    req.user = { rol: 'administrador' };
+  } else {
+    req.user = { rol: 'empleado' }; // O algún otro rol por defecto
+  }
+
+  next();
+};
+
+const soloAdmin = (req, res, next) => {
+  // Verifica si el usuario (adjunto por verificarToken) tiene el rol 'administrador'
+  if (!req.user || req.user.rol !== 'administrador') {
+    return res.status(403).json({ error: "Acceso prohibido. Solo administradores pueden realizar esta acción." });
+  }
+  next();
+};
+
+// ----------------------
 // GENERAR CODIGO VENTA
 // ----------------------
 async function generarCodigoVenta() {
@@ -16,11 +53,11 @@ async function generarCodigoVenta() {
 }
 
 // ----------------------------------------------
-// CRUD PRODUCTOS (SIN CAMBIOS)
+// CRUD PRODUCTOS (ASEGURADOS CON MIDDLEWARE)
 // ----------------------------------------------
 
-// Crear producto(s) - Acepta un objeto simple O un array de objetos
-app.post("/productos", async (req, res) => {
+// Crear producto(s)
+app.post("/productos", verificarToken, soloAdmin, async (req, res) => {
   try {
     const productosParaGuardar = Array.isArray(req.body) ? req.body : [req.body];
     const snapshot = await db.collection("productos").get();
@@ -82,7 +119,7 @@ app.post("/productos", async (req, res) => {
 });
 
 // Listar productos
-app.get("/productos", async (req, res) => {
+app.get("/productos", verificarToken, async (req, res) => {
   try {
     const snapshot = await db.collection("productos").get();
     const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -100,7 +137,7 @@ app.get("/productos", async (req, res) => {
 });
 
 // Actualizar producto
-app.put("/productos/:id", async (req, res) => {
+app.put("/productos/:id", verificarToken, soloAdmin, async (req, res) => {
   try {
     const updateData = { ...req.body };
 
@@ -122,7 +159,7 @@ app.put("/productos/:id", async (req, res) => {
 });
 
 // Eliminar producto
-app.delete("/productos/:id", async (req, res) => {
+app.delete("/productos/:id", verificarToken, soloAdmin, async (req, res) => {
   try {
     await db.collection("productos").doc(req.params.id).delete();
     res.json({ mensaje: "Producto eliminado" });
@@ -132,7 +169,7 @@ app.delete("/productos/:id", async (req, res) => {
 });
 
 // ----------------------------------------------
-// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL) (SIN CAMBIOS)
+// GESTIÓN DE DATOS PELIGROSA (BORRADO TOTAL - SOLO ADMIN)
 // ----------------------------------------------
 
 async function deleteCollection(collectionName) {
@@ -145,7 +182,7 @@ async function deleteCollection(collectionName) {
   return snapshot.size;
 }
 
-app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
+app.delete("/administracion/borrar-todo-peligro", verificarToken, soloAdmin, async (req, res) => {
   try {
     console.log("INICIANDO BORRADO TOTAL DE DATOS...");
     const productosBorrados = await deleteCollection("productos");
@@ -166,22 +203,22 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 });
 
 // ----------------------------------------------
-// VENTAS (ADAPTADAS PARA CARRITO)
+// VENTAS (ADAPTADAS PARA CARRITO - SOLO ADMIN)
 // ----------------------------------------------
 
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
-app.post("/ventas", async (req, res) => {
+app.post("/ventas", verificarToken, soloAdmin, async (req, res) => {
   try {
-    // CAMBIO CLAVE: Esperar 'articulos' como un array de objetos
+    // Espera 'articulos' con el precioVenta ajustado (o base)
     const { articulos, total, monto, cambio, nota } = req.body;
 
-    if (!articulos || !Array.isArray(articulos) || articulos.length === 0 || !total || !monto) {
+    if (!articulos || !Array.isArray(articulos) || articulos.length === 0 || total === undefined || monto === undefined) {
       return res.status(400).json({ error: "Faltan datos obligatorios o la lista de artículos está vacía." });
     }
 
     let costoVentaTotal = 0;
     const batch = db.batch();
-    const articulosVentaFinal = []; // Para guardar en la venta principal
+    const articulosVentaFinal = [];
 
     // 1. Validar y procesar cada artículo en el carrito
     for (const item of articulos) {
@@ -190,9 +227,8 @@ app.post("/ventas", async (req, res) => {
       const qty = Number(cantidad);
       const salePrice = Number(precioVenta);
 
-      if (!productoId || qty <= 0 || salePrice <= 0) {
-        // Si un artículo es inválido, abortamos toda la transacción
-        return res.status(400).json({ error: "Datos de artículo inválidos (productoId, cantidad o precioVenta)" });
+      if (!productoId || qty <= 0 || salePrice <= 0 || isNaN(qty) || isNaN(salePrice)) {
+        return res.status(400).json({ error: `Datos de artículo inválidos (ID: ${productoId}, Cantidad: ${cantidad}, Precio: ${precioVenta})` });
       }
 
       const productoRef = db.collection("productos").doc(productoId);
@@ -209,7 +245,7 @@ app.post("/ventas", async (req, res) => {
         return res.status(400).json({ error: `Stock insuficiente para el producto ${producto.nombre}. Disponible: ${producto.stock}, Solicitado: ${qty}` });
       }
 
-      // Cálculo de Costo y Ganancia (a nivel de artículo)
+      // Cálculo de Costo (usa el costo de la BD)
       const precioCompraUnidad = producto.precioCompra || 0;
       const costoMercanciaVendidaArticulo = precioCompraUnidad * qty;
       costoVentaTotal += costoMercanciaVendidaArticulo;
@@ -219,13 +255,13 @@ app.post("/ventas", async (req, res) => {
         stock: producto.stock - qty
       });
 
-      // Agregar al array final, incluyendo datos para la BD
+      // Agregar al array final de la venta
       articulosVentaFinal.push({
         productoId: productoId,
         cantidad: qty,
-        precioVenta: salePrice,
+        precioVenta: salePrice, // <--- Este es el precio ajustado por el frontend
         subtotal: qty * salePrice,
-        costoUnitario: precioCompraUnidad, // Para referencia
+        costoUnitario: precioCompraUnidad, // Costo de la BD, para registro de ganancia
       });
     }
 
@@ -241,11 +277,11 @@ app.post("/ventas", async (req, res) => {
     // 5. Crear objeto de venta principal
     const ventaData = {
       codigo: codigoVenta,
-      articulos: articulosVentaFinal, // CRUCIAL: Lista de artículos
+      articulos: articulosVentaFinal, // Lista de artículos
       total: Number(total),
       monto: Number(monto),
       cambio: Number(cambio),
-      costoVenta: costoVentaTotal, // CRUCIAL: Costo total de todos los artículos
+      costoVenta: costoVentaTotal,
       ganancia: gananciaTotal,
       nota: nota || "",
       fecha: new Date()
@@ -266,8 +302,8 @@ app.post("/ventas", async (req, res) => {
   }
 });
 
-// Obtener todas las ventas con datos del producto (Optimizado y calcula Ganancia - Ahora resumido)
-app.get("/ventas", async (req, res) => {
+// Obtener todas las ventas (Listado resumido)
+app.get("/ventas", verificarToken, async (req, res) => {
   try {
     const ventasSnapshot = await db.collection("ventas").get();
     const productosSnapshot = await db.collection("productos").get();
@@ -282,11 +318,11 @@ app.get("/ventas", async (req, res) => {
       const venta = doc.data();
       venta.id = doc.id;
 
-      // Calcular la ganancia (ya debería estar calculada, pero se reafirma)
+      // Calcular la ganancia
       const costoVenta = venta.costoVenta || 0;
       venta.ganancia = parseFloat((venta.total - costoVenta).toFixed(2));
 
-      // --- ADAPTACIÓN PARA VENTA MULTI-PRODUCTO (RESUMEN) ---
+      // --- RESUMEN PARA LA TABLA PRINCIPAL ---
       const articulos = venta.articulos || [];
 
       if (articulos.length > 0) {
@@ -295,10 +331,10 @@ app.get("/ventas", async (req, res) => {
         const numArticulos = articulos.length;
 
         if (producto) {
-          // Resumen para la tabla principal
+          // Resumen: Primer producto + X más
           venta.productoNombre = numArticulos > 1 ? `${producto.nombre} (+${numArticulos - 1} más)` : producto.nombre;
           venta.productoCodigo = producto.codigo;
-          venta.cantidad = `${numArticulos} artículos`; // Mostrar el número de artículos
+          venta.cantidad = `${numArticulos} artículos`;
         } else {
           venta.productoNombre = `Venta con ${numArticulos} artículos (Detalles no disponibles)`;
           venta.productoCodigo = "-";
@@ -325,8 +361,8 @@ app.get("/ventas", async (req, res) => {
   }
 });
 
-// Obtener una venta específica (No necesita muchos cambios, ya tiene el array de artículos si existe)
-app.get("/ventas/:id", async (req, res) => {
+// Obtener una venta específica (Detalle)
+app.get("/ventas/:id", verificarToken, async (req, res) => {
   try {
     const id = req.params.id;
 
@@ -338,7 +374,7 @@ app.get("/ventas/:id", async (req, res) => {
 
     const venta = ventaSnapshot.data();
 
-    // Calcular la ganancia (ya debería estar en el objeto, pero se recalcula/reafirma)
+    // Calcular la ganancia
     const costoVenta = venta.costoVenta || 0;
     venta.ganancia = parseFloat((venta.total - costoVenta).toFixed(2));
 
@@ -349,10 +385,6 @@ app.get("/ventas/:id", async (req, res) => {
   }
 });
 
-
-// ----------------------
-const PORT = 3000;
-app.listen(PORT, () => console.log("API lista en puerto", PORT));
 
 // ------------------------------
 // LOGIN y DASHBOARD (SIN CAMBIOS)
@@ -379,15 +411,21 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
-    return res.json({ mensaje: "Inicio de sesión exitoso" });
+    // DEBES DEVOLVER UN TOKEN SEGURO, AQUÍ DEVOLVEMOS EL TOKEN SIMULADO 'admin123'
+    return res.json({
+      mensaje: "Inicio de sesión exitoso",
+      token: userDoc.rol === 'administrador' ? 'admin123' : 'empleado_token',
+      rol: userDoc.rol
+    });
 
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-app.get("/dashboard/totales", async (req, res) => {
+app.get("/dashboard/totales", verificarToken, async (req, res) => {
   try {
+    // Este endpoint está protegido pero no requiere ser solo admin (puede ser visto por empleados)
     const productosSnapshot = await db.collection("productos").get();
     const totalProductos = productosSnapshot.size;
 
@@ -405,20 +443,26 @@ app.get("/dashboard/totales", async (req, res) => {
 
     ventasSnapshot.forEach(doc => {
       const venta = doc.data();
-      const fechaVenta = new Date(venta.fecha.toDate());
-
-      if (fechaVenta >= hace7dias) {
-        ventasUltimos7Dias += venta.total;
+      // Asegurarse que es un objeto de Firebase Timestamp
+      if (venta.fecha && venta.fecha.toDate) {
+        const fechaVenta = venta.fecha.toDate();
+        if (fechaVenta >= hace7dias) {
+          ventasUltimos7Dias += venta.total;
+        }
       }
     });
 
     res.json({
       totalProductos,
       productosStockBajo,
-      ventasUltimos7Dias
+      ventasUltimos7Dias: ventasUltimos7Dias.toFixed(2)
     });
 
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ----------------------
+const PORT = 3000;
+app.listen(PORT, () => console.log("API lista en puerto", PORT));
