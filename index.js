@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { db } = require("./firebase");
+const { db, admin } = require("./firebase"); // ASUMIMOS que exportas 'admin' (para Timestamp) desde firebase.js
 
 const app = express();
 app.use(cors());
@@ -21,6 +21,7 @@ async function generarCodigoVenta() {
 
 // Crear producto(s)
 app.post("/productos", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const productosParaGuardar = Array.isArray(req.body) ? req.body : [req.body];
     const snapshot = await db.collection("productos").get();
@@ -83,6 +84,7 @@ app.post("/productos", async (req, res) => {
 
 // Listar productos
 app.get("/productos", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const snapshot = await db.collection("productos").get();
     const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -101,6 +103,7 @@ app.get("/productos", async (req, res) => {
 
 // Actualizar producto
 app.put("/productos/:id", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const updateData = { ...req.body };
 
@@ -123,6 +126,7 @@ app.put("/productos/:id", async (req, res) => {
 
 // Eliminar producto
 app.delete("/productos/:id", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     await db.collection("productos").doc(req.params.id).delete();
     res.json({ mensaje: "Producto eliminado" });
@@ -136,6 +140,7 @@ app.delete("/productos/:id", async (req, res) => {
 // ----------------------------------------------
 
 async function deleteCollection(collectionName) {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   const snapshot = await db.collection(collectionName).get();
   const batch = db.batch();
   snapshot.docs.forEach(doc => {
@@ -146,6 +151,7 @@ async function deleteCollection(collectionName) {
 }
 
 app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     console.log("INICIANDO BORRADO TOTAL DE DATOS...");
     const productosBorrados = await deleteCollection("productos");
@@ -171,8 +177,8 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
 app.post("/ventas", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
-    // Espera 'articulos' con el precioVenta ajustado (o base)
     const { articulos, total, monto, cambio, nota } = req.body;
 
     if (!articulos || !Array.isArray(articulos) || articulos.length === 0 || total === undefined || monto === undefined) {
@@ -183,7 +189,6 @@ app.post("/ventas", async (req, res) => {
     const batch = db.batch();
     const articulosVentaFinal = [];
 
-    // 1. Validar y procesar cada artículo en el carrito
     for (const item of articulos) {
       const { productoId, cantidad, precioVenta } = item;
 
@@ -203,44 +208,36 @@ app.post("/ventas", async (req, res) => {
 
       const producto = productoDoc.data();
 
-      // Validar stock
       if (producto.stock < qty) {
         return res.status(400).json({ error: `Stock insuficiente para el producto ${producto.nombre}. Disponible: ${producto.stock}, Solicitado: ${qty}` });
       }
 
-      // Cálculo de Costo (usa el costo de la BD)
       const precioCompraUnidad = producto.precioCompra || 0;
       const costoMercanciaVendidaArticulo = precioCompraUnidad * qty;
       costoVentaTotal += costoMercanciaVendidaArticulo;
 
-      // Preparar descuento de stock en el batch
       batch.update(productoRef, {
         stock: producto.stock - qty
       });
 
-      // Agregar al array final de la venta
       articulosVentaFinal.push({
         productoId: productoId,
         cantidad: qty,
-        precioVenta: salePrice, // <--- Este es el precio ajustado por el frontend
+        precioVenta: salePrice,
         subtotal: qty * salePrice,
-        costoUnitario: precioCompraUnidad, // Costo de la BD, para registro de ganancia
+        costoUnitario: precioCompraUnidad,
       });
     }
 
-    // 2. Ejecutar todas las actualizaciones de stock
     await batch.commit();
 
-    // 3. Generar código de venta V00X
     const codigoVenta = await generarCodigoVenta();
 
-    // 4. Calcular la ganancia total
     const gananciaTotal = Number(total) - costoVentaTotal;
 
-    // 5. Crear objeto de venta principal
     const ventaData = {
       codigo: codigoVenta,
-      articulos: articulosVentaFinal, // Lista de artículos
+      articulos: articulosVentaFinal,
       total: Number(total),
       monto: Number(monto),
       cambio: Number(cambio),
@@ -250,7 +247,6 @@ app.post("/ventas", async (req, res) => {
       fecha: new Date()
     };
 
-    // 6. Guardar venta
     const ventaRef = await db.collection("ventas").add(ventaData);
 
     res.json({
@@ -265,10 +261,38 @@ app.post("/ventas", async (req, res) => {
   }
 });
 
-// Obtener todas las ventas (Listado resumido)
+// Obtener todas las ventas (Listado resumido con filtro de fecha)
 app.get("/ventas", async (req, res) => {
   try {
-    const ventasSnapshot = await db.collection("ventas").get();
+    const dateFilter = req.query.date; // Obtener el parámetro de la URL: ?date=YYYY-MM-DD
+    let ventasQuery = db.collection("ventas");
+
+    if (dateFilter) {
+      // 1. Convertir la fecha YYYY-MM-DD a un objeto Date (inicio del día)
+      const startOfDay = new Date(dateFilter);
+      startOfDay.setHours(0, 0, 0, 0); // Establecer a la medianoche (00:00:00.000)
+
+      // 2. Calcular el final del día
+      const endOfDay = new Date(startOfDay);
+      endOfDay.setDate(endOfDay.getDate() + 1); // El día siguiente (ej. 00:00:00.000)
+
+      // 3. Convertir a Timestamps para la consulta de Firestore
+      const startTimestamp = admin.firestore.Timestamp.fromDate(startOfDay);
+      const endTimestamp = admin.firestore.Timestamp.fromDate(endOfDay);
+
+      // Aplicar el filtro 
+      // Usamos la fecha como filtro de rango (>= inicio del día, < inicio del día siguiente)
+      ventasQuery = ventasQuery
+        .where("fecha", ">=", startTimestamp)
+        .where("fecha", "<", endTimestamp);
+    }
+
+    // Opcional: Ordenar por fecha de la más reciente a la más antigua
+    ventasQuery = ventasQuery.orderBy("fecha", "desc");
+
+    const ventasSnapshot = await ventasQuery.get();
+
+    // Obtener todos los productos para el resumen (sin filtro de fecha)
     const productosSnapshot = await db.collection("productos").get();
     const productosMap = {};
     productosSnapshot.docs.forEach(doc => {
@@ -326,6 +350,7 @@ app.get("/ventas", async (req, res) => {
 
 // Obtener una venta específica (Detalle)
 app.get("/ventas/:id", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const id = req.params.id;
 
@@ -354,6 +379,7 @@ app.get("/ventas/:id", async (req, res) => {
 // ------------------------------
 
 app.post('/login', async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const { usuario, password } = req.body;
 
@@ -374,7 +400,6 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
-    // Se devuelve un token (aunque no se use) para simular el flujo
     return res.json({
       mensaje: "Inicio de sesión exitoso",
       token: 'token_sin_uso',
@@ -387,6 +412,7 @@ app.post('/login', async (req, res) => {
 });
 
 app.get("/dashboard/totales", async (req, res) => {
+  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const productosSnapshot = await db.collection("productos").get();
     const totalProductos = productosSnapshot.size;
@@ -405,7 +431,6 @@ app.get("/dashboard/totales", async (req, res) => {
 
     ventasSnapshot.forEach(doc => {
       const venta = doc.data();
-      // Asegurarse que es un objeto de Firebase Timestamp
       if (venta.fecha && venta.fecha.toDate) {
         const fechaVenta = venta.fecha.toDate();
         if (fechaVenta >= hace7dias) {
