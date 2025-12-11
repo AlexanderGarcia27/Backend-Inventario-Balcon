@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { db, admin } = require("./firebase"); // ASUMIMOS que exportas 'admin' (para Timestamp) desde firebase.js
+const { db, admin } = require("./firebase"); // Asegúrate de que 'admin' y 'db' estén exportados
 
 const app = express();
 app.use(cors());
@@ -177,7 +177,6 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
 app.post("/ventas", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const { articulos, total, monto, cambio, nota } = req.body;
 
@@ -244,7 +243,8 @@ app.post("/ventas", async (req, res) => {
       costoVenta: costoVentaTotal,
       ganancia: gananciaTotal,
       nota: nota || "",
-      fecha: new Date()
+      // ***** AJUSTE CLAVE 1: GUARDAR COMO TIMESTAMP DE FIRESTORE *****
+      fecha: admin.firestore.Timestamp.fromDate(new Date())
     };
 
     const ventaRef = await db.collection("ventas").add(ventaData);
@@ -267,6 +267,9 @@ app.get("/ventas", async (req, res) => {
     const dateFilter = req.query.date; // Obtener el parámetro de la URL: ?date=YYYY-MM-DD
     let ventasQuery = db.collection("ventas");
 
+    // ***** AJUSTE CLAVE 2: SE RESTABLECE EL FILTRO DE FECHA *****
+    // Este filtro funcionará solo para las ventas que tienen el campo 'fecha'
+    // como un Timestamp de Firestore.
     if (dateFilter) {
       // 1. Convertir la fecha YYYY-MM-DD a un objeto Date (inicio del día)
       const startOfDay = new Date(dateFilter);
@@ -281,11 +284,11 @@ app.get("/ventas", async (req, res) => {
       const endTimestamp = admin.firestore.Timestamp.fromDate(endOfDay);
 
       // Aplicar el filtro 
-      // Usamos la fecha como filtro de rango (>= inicio del día, < inicio del día siguiente)
       ventasQuery = ventasQuery
         .where("fecha", ">=", startTimestamp)
         .where("fecha", "<", endTimestamp);
     }
+    // ***************************************************************
 
     // Opcional: Ordenar por fecha de la más reciente a la más antigua
     ventasQuery = ventasQuery.orderBy("fecha", "desc");
@@ -431,6 +434,8 @@ app.get("/dashboard/totales", async (req, res) => {
 
     ventasSnapshot.forEach(doc => {
       const venta = doc.data();
+
+      // Aseguramos que solo procesamos fechas válidas y de tipo Timestamp
       if (venta.fecha && venta.fecha.toDate) {
         const fechaVenta = venta.fecha.toDate();
         if (fechaVenta >= hace7dias) {
