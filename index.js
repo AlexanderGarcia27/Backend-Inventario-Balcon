@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
-const { db, admin } = require("./firebase"); // ASUMIMOS que exportas 'admin' (para Timestamp) desde firebase.js
+// Asegúrate de que tu firebase.js exporte 'db' (Firestore) y 'admin' (Firebase Admin SDK)
+const { db, admin } = require("./firebase");
 
 const app = express();
 app.use(cors());
@@ -21,7 +22,6 @@ async function generarCodigoVenta() {
 
 // Crear producto(s)
 app.post("/productos", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const productosParaGuardar = Array.isArray(req.body) ? req.body : [req.body];
     const snapshot = await db.collection("productos").get();
@@ -53,6 +53,7 @@ app.post("/productos", async (req, res) => {
         categoria: producto.categoria || 'Sin Categoría',
         stock: Number(producto.stock) || 0,
         codigo: nuevoCodigo,
+        // Usamos Date() solo para productos, no es tan crítico como las ventas
         creadoEn: new Date()
       };
 
@@ -84,7 +85,6 @@ app.post("/productos", async (req, res) => {
 
 // Listar productos
 app.get("/productos", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const snapshot = await db.collection("productos").get();
     const lista = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -103,7 +103,6 @@ app.get("/productos", async (req, res) => {
 
 // Actualizar producto
 app.put("/productos/:id", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const updateData = { ...req.body };
 
@@ -126,7 +125,6 @@ app.put("/productos/:id", async (req, res) => {
 
 // Eliminar producto
 app.delete("/productos/:id", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     await db.collection("productos").doc(req.params.id).delete();
     res.json({ mensaje: "Producto eliminado" });
@@ -140,7 +138,6 @@ app.delete("/productos/:id", async (req, res) => {
 // ----------------------------------------------
 
 async function deleteCollection(collectionName) {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   const snapshot = await db.collection(collectionName).get();
   const batch = db.batch();
   snapshot.docs.forEach(doc => {
@@ -151,7 +148,6 @@ async function deleteCollection(collectionName) {
 }
 
 app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     console.log("INICIANDO BORRADO TOTAL DE DATOS...");
     const productosBorrados = await deleteCollection("productos");
@@ -177,7 +173,6 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
 app.post("/ventas", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const { articulos, total, monto, cambio, nota } = req.body;
 
@@ -229,10 +224,10 @@ app.post("/ventas", async (req, res) => {
       });
     }
 
+    // Ejecutar la actualización de stock
     await batch.commit();
 
     const codigoVenta = await generarCodigoVenta();
-
     const gananciaTotal = Number(total) - costoVentaTotal;
 
     const ventaData = {
@@ -244,7 +239,8 @@ app.post("/ventas", async (req, res) => {
       costoVenta: costoVentaTotal,
       ganancia: gananciaTotal,
       nota: nota || "",
-      fecha: new Date()
+      // 🟢 AJUSTE CLAVE: Usar serverTimestamp para que el filtro por fecha funcione
+      fecha: admin.firestore.FieldValue.serverTimestamp()
     };
 
     const ventaRef = await db.collection("ventas").add(ventaData);
@@ -268,23 +264,32 @@ app.get("/ventas", async (req, res) => {
     let ventasQuery = db.collection("ventas");
 
     if (dateFilter) {
-      // 1. Convertir la fecha YYYY-MM-DD a un objeto Date (inicio del día)
-      const startOfDay = new Date(dateFilter);
-      startOfDay.setHours(0, 0, 0, 0); // Establecer a la medianoche (00:00:00.000)
+      // 1. Crear los límites de tiempo (Inicio y Fin del día) usando UTC para evitar problemas de zona horaria
+      // El 'T00:00:00Z' y 'T23:59:59Z' asegura que el rango sea preciso.
+      const startOfDay = new Date(dateFilter + 'T00:00:00Z');
+      const endOfDay = new Date(dateFilter + 'T23:59:59Z');
 
-      // 2. Calcular el final del día
-      const endOfDay = new Date(startOfDay);
-      endOfDay.setDate(endOfDay.getDate() + 1); // El día siguiente (ej. 00:00:00.000)
-
-      // 3. Convertir a Timestamps para la consulta de Firestore
+      // 2. Convertir a Timestamps de Firestore usando 'admin'
       const startTimestamp = admin.firestore.Timestamp.fromDate(startOfDay);
       const endTimestamp = admin.firestore.Timestamp.fromDate(endOfDay);
 
+      /* OTRA OPCIÓN: Usar el inicio del día y el inicio del día siguiente (más limpio)
+      const startOfDay = new Date(dateFilter);
+      startOfDay.setHours(0, 0, 0, 0); // Inicio del día seleccionado
+
+      const startOfNextDay = new Date(startOfDay);
+      startOfNextDay.setDate(startOfNextDay.getDate() + 1); // Inicio del día siguiente
+      
+      const startTimestamp = admin.firestore.Timestamp.fromDate(startOfDay);
+      const endTimestamp = admin.firestore.Timestamp.fromDate(startOfNextDay); // Usar < inicio del día siguiente
+      
+      // ventasQuery = ventasQuery.where("fecha", ">=", startTimestamp).where("fecha", "<", endTimestamp);
+      */
+
       // Aplicar el filtro 
-      // Usamos la fecha como filtro de rango (>= inicio del día, < inicio del día siguiente)
       ventasQuery = ventasQuery
         .where("fecha", ">=", startTimestamp)
-        .where("fecha", "<", endTimestamp);
+        .where("fecha", "<=", endTimestamp); // Usamos <= 23:59:59 para mayor claridad con el rango definido arriba
     }
 
     // Opcional: Ordenar por fecha de la más reciente a la más antigua
@@ -344,13 +349,13 @@ app.get("/ventas", async (req, res) => {
     res.json(ventas);
 
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error en GET /ventas:", error);
+    res.status(500).json({ error: error.message || "Error al listar ventas con filtro." });
   }
 });
 
 // Obtener una venta específica (Detalle)
 app.get("/ventas/:id", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const id = req.params.id;
 
@@ -379,7 +384,6 @@ app.get("/ventas/:id", async (req, res) => {
 // ------------------------------
 
 app.post('/login', async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const { usuario, password } = req.body;
 
@@ -412,7 +416,6 @@ app.post('/login', async (req, res) => {
 });
 
 app.get("/dashboard/totales", async (req, res) => {
-  // ... (CÓDIGO SIN CAMBIOS) ...
   try {
     const productosSnapshot = await db.collection("productos").get();
     const totalProductos = productosSnapshot.size;
@@ -431,6 +434,7 @@ app.get("/dashboard/totales", async (req, res) => {
 
     ventasSnapshot.forEach(doc => {
       const venta = doc.data();
+      // Asumimos que la fecha es un Timestamp y tiene el método toDate()
       if (venta.fecha && venta.fecha.toDate) {
         const fechaVenta = venta.fecha.toDate();
         if (fechaVenta >= hace7dias) {
