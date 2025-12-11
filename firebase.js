@@ -8,9 +8,18 @@ else {
   serviceAccount = require("./key.json");
 }
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+// Inicialización
+if (admin.apps.length === 0) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+}
+
 
 const db = admin.firestore();
-module.exports = { db };
+
+// 🚨 CORRECCIÓN CLAVE: EXPORTAR 'admin' junto con 'db'
+module.exports = {
+  db,
+  admin // <-- ESTO ES LO QUE FALTABA
+};
