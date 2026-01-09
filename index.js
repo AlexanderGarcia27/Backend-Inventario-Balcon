@@ -178,7 +178,7 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
 app.post("/ventas", async (req, res) => {
   try {
-    const { articulos, total, monto, cambio, nota } = req.body;
+    const { articulos, total, monto, cambio, nota, tipoVenta, cliente } = req.body;
 
     if (!articulos || !Array.isArray(articulos) || articulos.length === 0 || total === undefined || monto === undefined) {
       return res.status(400).json({ error: "Faltan datos obligatorios o la lista de artículos está vacía." });
@@ -235,17 +235,19 @@ app.post("/ventas", async (req, res) => {
     const gananciaTotal = Number(total) - costoVentaTotal;
 
     const ventaData = {
-      codigo: codigoVenta,
-      articulos: articulosVentaFinal,
-      total: Number(total),
-      monto: Number(monto),
-      cambio: Number(cambio),
-      costoVenta: costoVentaTotal,
-      ganancia: gananciaTotal,
-      nota: nota || "",
-      // ***** AJUSTE CLAVE 1: GUARDAR COMO TIMESTAMP DE FIRESTORE *****
-      fecha: admin.firestore.Timestamp.fromDate(new Date())
+    codigo: codigoVenta,
+    articulos: articulosVentaFinal,
+    total: Number(total),
+    monto: Number(monto),
+    cambio: Number(cambio),
+    tipoVenta: tipoVenta || 'contado',
+    cliente: tipoVenta === 'credito' ? cliente : null,
+    costoVenta: costoVentaTotal,
+    ganancia: gananciaTotal,
+    nota: nota || "",
+    fecha: admin.firestore.Timestamp.fromDate(new Date())
     };
+
 
     const ventaRef = await db.collection("ventas").add(ventaData);
 
