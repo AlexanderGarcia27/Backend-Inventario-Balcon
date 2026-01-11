@@ -404,6 +404,41 @@ app.get("/ventas/:id", async (req, res) => {
     console.error("Error al obtener la venta:", error);
     return res.status(500).json({ error: "Error al obtener la venta" });
   }
+  });
+// Actualizar una venta (especialmente para actualizar pagos de crédito)
+app.put("/ventas/:id", async (req, res) => {
+  try {
+    const ventaId = req.params.id;
+    const { montoPagado, saldoPendiente, estatus } = req.body;
+
+    const ventaRef = db.collection("ventas").doc(ventaId);
+    const ventaDoc = await ventaRef.get();
+
+    if (!ventaDoc.exists) {
+      return res.status(404).json({ error: "Venta no encontrada" });
+    }
+
+    const updateData = {};
+
+    if (montoPagado !== undefined) {
+      updateData.montoPagado = Number(montoPagado) || 0;
+    }
+
+    if (saldoPendiente !== undefined) {
+      updateData.saldoPendiente = Number(saldoPendiente) || 0;
+    }
+
+    if (estatus !== undefined) {
+      updateData.estatus = estatus;
+    }
+
+    await ventaRef.update(updateData);
+
+    res.json({ mensaje: "Venta actualizada correctamente" });
+  } catch (error) {
+    console.error("Error al actualizar la venta:", error);
+    res.status(500).json({ error: error.message || "Error al actualizar la venta" });
+  }
 });
 
 
