@@ -178,7 +178,17 @@ app.delete("/administracion/borrar-todo-peligro", async (req, res) => {
 // Crear una venta (Soporta MÚLTIPLES ARTÍCULOS)
 app.post("/ventas", async (req, res) => {
   try {
-    const { articulos, total, monto, cambio, nota, tipoVenta, cliente } = req.body;
+    const {
+      articulos,
+      total,
+      monto,
+      cambio,
+      nota,
+      tipoVenta,
+      cliente,
+      montoPagado // 👈 nuevo
+    } = req.body;
+
 
     if (!articulos || !Array.isArray(articulos) || articulos.length === 0 || total === undefined || monto === undefined) {
       return res.status(400).json({ error: "Faltan datos obligatorios o la lista de artículos está vacía." });
@@ -234,6 +244,21 @@ app.post("/ventas", async (req, res) => {
 
     const gananciaTotal = Number(total) - costoVentaTotal;
 
+    let pagoInicial = 0;
+
+if (tipoVenta === 'credito') {
+  pagoInicial = Number(montoPagado) || 0;
+}
+
+const saldoPendiente = Number(total) - pagoInicial;
+
+  let estatus = 'pendiente';
+  if (saldoPendiente <= 0) {
+    estatus = 'pagado';
+  } else if (pagoInicial > 0) {
+    estatus = 'parcial';
+  }
+
     const ventaData = {
     codigo: codigoVenta,
     articulos: articulosVentaFinal,
@@ -242,6 +267,9 @@ app.post("/ventas", async (req, res) => {
     cambio: Number(cambio),
     tipoVenta: tipoVenta || 'contado',
     cliente: tipoVenta === 'credito' ? cliente : null,
+    montoPagado: pagoInicial,
+    saldoPendiente,
+    estatus,
     costoVenta: costoVentaTotal,
     ganancia: gananciaTotal,
     nota: nota || "",
